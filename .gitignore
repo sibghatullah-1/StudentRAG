@@ -3,4 +3,22 @@ __pycache__/
 build/
 dist/
 .rag_cache/
-pdf docs for rag/
+\# Python Environments
+venv/
+backend-ai/clean_env/
+
+# Python Caches & Build Files
+backend-ai/__pycache__/
+backend-ai/build/
+backend-ai/dist/
+*.spec
+
+# Flutter Build & Temp Files
+student_ai_app/build/
+student_ai_app/.dart_tool/
+student_ai_app/.idea/
+*.iml
+
+# App Specific Temp Folders
+temp_uploades/
+.rag_cache/

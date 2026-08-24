@@ -3,79 +3,82 @@ import lancedb
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-# from langchain_community.vectorstores import LanceDB
 from langchain_lancedb import LanceDB
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 
-DB_PATH = os.path.expanduser("~/.student_rag/lancedb")
+# FIX: Match the AppData path used in main.py
+appdata_dir = os.getenv('APPDATA')
+# if appdata_dir:
+DB_PATH = os.path.join(appdata_dir, "StudentRAG", "lancedb")
+# else:
+#     DB_PATH = os.path.expanduser("~/.student_rag/lancedb")
+os.makedirs(DB_PATH, exist_ok=True)
 
-def initialize_components():
-    """
-    Initializes and returns the three core pieces of our RAG system:
-    1. The Database Table (LanceDB)
-    2. The Embedding Model (nomic-embed-text)
-    3. The Chat LLM (qwen2.5:3b)
-    """
-    
-
+def initialize_components(model_name: str = "qwen2.5:3b"):
     db = lancedb.connect(DB_PATH)
-
-    
-    table = db.open_table('documents')
-
     embedding_question = OllamaEmbeddings(model="nomic-embed-text")
-    
- 
-    chatmodel = ChatOllama(model='qwen2.5:3b',temperature=0)
-    
-    
-    return ( db , embedding_question , chatmodel )
+    chatmodel = ChatOllama(model=model_name, temperature=0)
+    return db, embedding_question, chatmodel 
 
+def get_answer(user_query: str, chat_history: list, chat_id: str, model_name: str = "qwen2.5:3b", attached_files: list = []):
+    db, embeddings, chatmodel = initialize_components(model_name=model_name)
 
-def get_answer(user_query: str, chat_history: list, chat_id: str) -> str:
-    db, embeddings, chatmodel = initialize_components()
-
-    # ---------------------------------------------------------
-    # STEP 1: HISTORY-AWARE QUERY REWRITING
-    # If there is a chat history, ask the LLM to rewrite the question 
-    # so it makes sense without the history.
-    # ---------------------------------------------------------
+    formatted_history = []
     if chat_history:
+        for msg in chat_history:
+            role = msg.get("role", "human")
+            content = msg.get("content", "")
+            if role in ["human", "user"]:
+                formatted_history.append(("human", content))
+            elif role in ["ai", "assistant"]:
+                formatted_history.append(("ai", content))
+
+    if formatted_history:
         rephrase_prompt = ChatPromptTemplate.from_messages([
             ("system", "Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."),
             ("placeholder", "{chat_history}"),
             ("human", "{input}"),
         ])
-        
-        # This small chain just rewrites the text
         rewriter_chain = rephrase_prompt | chatmodel | StrOutputParser()
         search_query = rewriter_chain.invoke({
-            "chat_history": chat_history, 
+            "chat_history": formatted_history, 
             "input": user_query
         })
-        print(f"\n--- DEBUG: Rewrote query to: '{search_query}' ---\n")
     else:
-        # If no history, just use the exact question
         search_query = user_query
 
-    # ---------------------------------------------------------
-    # STEP 2: NATIVE LANCEDB SEARCH (Using the standalone query!)
-    # ---------------------------------------------------------
-    table = db.open_table('documents')
-    query_vec = embeddings.embed_query(search_query) # Embed the REWRITTEN query
+    try:
+        table = db.open_table('documents')
+    except Exception:
+        return {"text": "No documents have been uploaded or indexed yet for this workspace.", "sources": []}
+
+    query_vec = embeddings.embed_query(search_query)
     
-    raw_results = table.search(query_vec).where(f"chat_id = '{chat_id}'").limit(4).to_list()
+    # FIX: Increased limit from 4 to 6 to capture more relevant chunks (fixing the "Part A" context loss)
+    raw_results = table.search(query_vec).where(f"chat_id = '{chat_id}'").limit(6).to_list()
 
     docs = []
     for result in raw_results:
-        docs.append(Document(page_content=result["text"], metadata=result))
+        source_path = result.get("source", "Unknown Document")
+        filename = os.path.basename(str(source_path))
+        tagged_text = f"[Source File: {filename}]\n{result['text']}"
+        docs.append(Document(page_content=tagged_text, metadata=result))
 
-    # ---------------------------------------------------------
-    # STEP 3: ANSWER THE QUESTION
-    # ---------------------------------------------------------
+    if not docs:
+        return {"text": "I couldn't find any relevant information in the attached documents for this query.", "sources": []}
+
+    files_str = "\n- ".join(attached_files) if attached_files else "None"
+
     qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a helpful AI study assistant. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know.\n\nContext:\n{context}"),
+        ("system", 
+         "You are a helpful AI study assistant.\n"
+         f"Currently uploaded documents for this chat session:\n- {files_str}\n\n"
+         "Guidelines:\n"
+         "1. If the user asks what documents or files are uploaded, list the document names from above.\n"
+         "2. For questions about document content, answer accurately using the retrieved context below.\n"
+         "3. If the answer is not present in the context, state that you do not know.\n\n"
+         "Retrieved Context:\n{context}"),
         ("placeholder", "{chat_history}"),
         ("human", "{input}"),
     ])
@@ -84,22 +87,19 @@ def get_answer(user_query: str, chat_history: list, chat_id: str) -> str:
     
     response = question_answer_chain.invoke({
         "context": docs,         
-        "input": user_query,    # The AI still replies to the original prompt
-        "chat_history": chat_history
+        "input": user_query,
+        "chat_history": formatted_history
     })
 
-    return response
+    sources_list = []
+    for d in docs:
+        clean_text = d.page_content.split("]\n")[-1] if "]\n" in d.page_content else d.page_content
+        sources_list.append({
+            "source": d.metadata.get("source", "Unknown Document"),
+            "text": clean_text[:200] + "..."
+        })
 
-
-if __name__ == "__main__":
-
-    fake_histor = []
-
-    chat_it = "chat_001"
-
-    user_query = "what do you know about history of pakistan"
-
-    result = get_answer(user_query,fake_histor,chat_it)
-
-    print("reposnse ---------")
-    print(result)
+    return {
+        "text": response,
+        "sources": sources_list
+    }
