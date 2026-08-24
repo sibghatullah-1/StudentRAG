@@ -359,6 +359,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
   bool isUploading = false;
   bool isSidebarVisible = true; // NEW: Tracks sidebar state
 
+  // double _sidebarWidth = 270.0;
+  // bool _isDraggingSidebar = false;
+
   List<String> availableModels = [];
   String? selectedModel;
   bool isLoadingModels = true;
@@ -374,6 +377,46 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
     "Format the main points into a table",
     "Check the document for limitations",
   ];
+  //------------------------------------------------------------------------------------------------------
+  //------------------------------------------------------------------------------------------------------
+  //------------------------------------------------------------------------------------------------------
+  Future<void> _generateAITitle(
+    ChatSession session,
+    String firstMessage,
+  ) async {
+    if (selectedModel == null || selectedModel == 'Ollama not running') return;
+
+    try {
+      final response = await http.post(
+        Uri.parse('http://127.0.0.1:11434/api/generate'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'model': selectedModel,
+          'prompt':
+              'Generate a concise 3 to 5 word title for a conversation that begins with this question: "$firstMessage". Return ONLY the title with no quotation marks, labels, or extra text.',
+          'stream': false,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        String generatedTitle = (data['response'] as String? ?? '').trim();
+        generatedTitle = generatedTitle
+            .replaceAll('"', '')
+            .replaceAll('\n', ' ');
+
+        if (generatedTitle.isNotEmpty && mounted) {
+          setState(() {
+            session.title = generatedTitle;
+            session.isCustomNamed = true;
+          });
+          _saveChats();
+        }
+      }
+    } catch (e) {
+      debugPrint("Failed to generate AI title: $e");
+    }
+  }
 
   // --- LOCAL PERSISTENCE LOGIC ---
   Future<void> _loadSavedChats() async {
@@ -501,7 +544,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text("Copied to clipboard!"),
+        content: const Text(
+          "Copied to clipboard!",
+          style: TextStyle(color: Color(0xFFF4F0E8)),
+        ),
         backgroundColor: clSurface,
         behavior: SnackBarBehavior.floating,
         width: 180,
@@ -553,7 +599,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
         if (mounted)
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text("Chat exported!"),
+              content: const Text(
+                "Chat exported!",
+                style: TextStyle(color: Color(0xFFF4F0E8)),
+              ),
               backgroundColor: clSurface,
             ),
           );
@@ -587,7 +636,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
           decoration: const InputDecoration(
             hintText: "Enter title...",
             hintStyle: TextStyle(color: clTextDim),
-            focusedBorder: UnderlineInputBorder(
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.all(
+                //-------------------------------------------------
+                Radius.circular(10),
+              ), //-------------------------------------------------
               borderSide: BorderSide(color: clAccent),
             ),
           ),
@@ -715,13 +768,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
       var response = await http.Response.fromStream(await request.send());
       if (response.statusCode == 200) {
         setState(() {
-          for (var file in result.files)
-            if (!activeChat.documents.contains(file.name))
+          for (var file in result.files) {
+            if (!activeChat.documents.contains(file.name)) {
               activeChat.documents.add(file.name);
-          if (!activeChat.isCustomNamed) {
-            activeChat.title = _formatDocTitle(result.files.first.name);
-            if (result.files.length > 1) activeChat.title += " & others";
-            activeChat.isCustomNamed = true;
+            }
           }
         });
         _saveChats();
@@ -754,6 +804,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
     final text = _msgController.text.trim();
     if (text.isEmpty) return;
 
+    final bool shouldGenerateTitle = !activeChat.isCustomNamed;
+
     List<Map<String, String>> historyPayload = activeChat.messages
         .where((m) => m.role != 'system')
         .map(
@@ -763,17 +815,19 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
     _msgController.clear();
     setState(() {
       activeChat.messages.add(Message(role: 'user', text: text));
-      if (!activeChat.isCustomNamed) {
+      if (shouldGenerateTitle) {
         activeChat.title = text.length > 25
-            ? "${text.substring(0, 25)}..."
+            ? "${text.substring(0, 22)}..."
             : text;
-        activeChat.isCustomNamed = true;
       }
       isTyping = true;
     });
     _saveChats();
-    _scrollToBottom(); // Scroll when user sends
+    _scrollToBottom();
 
+    if (shouldGenerateTitle) {
+      _generateAITitle(activeChat, text);
+    }
     try {
       final response = await http.post(
         Uri.parse('http://127.0.0.1:8008/chat'),
@@ -986,6 +1040,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
                       ),
                     ),
                   ),
+
                   Expanded(
                     child: Row(
                       children: [
@@ -1354,95 +1409,19 @@ class _DashboardScreenState extends State<DashboardScreen> with WindowListener {
                                         final chat = filteredChats[index];
                                         final isActive =
                                             chat.id == activeChatId;
-                                        return Container(
-                                          margin: const EdgeInsets.only(
-                                            bottom: 3,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: isActive
-                                                ? clSurface
-                                                : Colors.transparent,
-                                            borderRadius: BorderRadius.circular(
-                                              8,
-                                            ),
-                                            border: isActive
-                                                ? Border.all(color: clBorder)
-                                                : null,
-                                          ),
-                                          child: ListTile(
-                                            dense: true,
-                                            contentPadding:
-                                                const EdgeInsets.symmetric(
-                                                  horizontal: 10,
-                                                  vertical: 0,
-                                                ),
-                                            title: Text(
-                                              chat.title,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: isActive
-                                                    ? clTextMain
-                                                    : clTextMuted,
-                                                fontSize: 13,
-                                                fontWeight: isActive
-                                                    ? FontWeight.bold
-                                                    : FontWeight.normal,
-                                              ),
-                                            ),
-                                            trailing: PopupMenuButton<String>(
-                                              icon: Icon(
-                                                Icons.more_horiz,
-                                                size: 16,
-                                                color: isActive
-                                                    ? clTextMuted
-                                                    : Colors.transparent,
-                                              ),
-                                              color: clSurface,
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                                side: const BorderSide(
-                                                  color: clBorder,
-                                                ),
-                                              ),
-                                              onSelected: (val) {
-                                                if (val == 'rename')
-                                                  _showRenameDialog(chat);
-                                                if (val == 'delete')
-                                                  _deleteChat(chat);
-                                              },
-                                              itemBuilder: (context) => [
-                                                const PopupMenuItem(
-                                                  value: 'rename',
-                                                  child: Text(
-                                                    "✏️ Rename",
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      color: clTextMain,
-                                                    ),
-                                                  ),
-                                                ),
-                                                const PopupMenuItem(
-                                                  value: 'delete',
-                                                  child: Text(
-                                                    "🗑️ Delete",
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      color: Colors.redAccent,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            onTap: () {
-                                              setState(
-                                                () => activeChatId = chat.id,
-                                              );
-                                              _saveChats();
-                                              _scrollToBottom();
-                                            },
-                                          ),
+                                        return _ConversationTile(
+                                          chat: chat,
+                                          isActive: isActive,
+                                          onTap: () {
+                                            setState(
+                                              () => activeChatId = chat.id,
+                                            );
+                                            _saveChats();
+                                            _scrollToBottom();
+                                          },
+                                          onRename: () =>
+                                              _showRenameDialog(chat),
+                                          onDelete: () => _deleteChat(chat),
                                         );
                                       },
                                     ),
@@ -2060,4 +2039,109 @@ class Vector3DPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant Vector3DPainter oldDelegate) => true;
+}
+
+class _ConversationTile extends StatefulWidget {
+  final ChatSession chat;
+  final bool isActive;
+  final VoidCallback onTap;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+
+  const _ConversationTile({
+    required this.chat,
+    required this.isActive,
+    required this.onTap,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  @override
+  State<_ConversationTile> createState() => _ConversationTileState();
+}
+
+class _ConversationTileState extends State<_ConversationTile> {
+  bool isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => isHovered = true),
+      onExit: (_) => setState(() => isHovered = false),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 3),
+        decoration: BoxDecoration(
+          color: widget.isActive ? clSurface : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: widget.isActive ? Border.all(color: clBorder) : null,
+        ),
+        child: ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 0,
+          ),
+          title: Tooltip(
+            message: widget.chat.title,
+            waitDuration: const Duration(milliseconds: 400),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            textStyle: const TextStyle(fontSize: 12, color: clTextMain),
+            decoration: BoxDecoration(
+              color: clBg,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: clBorder),
+            ),
+            child: Text(
+              widget.chat.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: widget.isActive ? clTextMain : clTextMuted,
+                fontSize: 13,
+                fontWeight: widget.isActive
+                    ? FontWeight.bold
+                    : FontWeight.normal,
+              ),
+            ),
+          ),
+          trailing: PopupMenuButton<String>(
+            icon: Icon(
+              Icons.more_horiz,
+              size: 16,
+              // The fix: Make it visible if it's active OR currently being hovered
+              color: widget.isActive || isHovered
+                  ? clTextMuted
+                  : Colors.transparent,
+            ),
+            color: clSurface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+              side: const BorderSide(color: clBorder),
+            ),
+            onSelected: (val) {
+              if (val == 'rename') widget.onRename();
+              if (val == 'delete') widget.onDelete();
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'rename',
+                child: Text(
+                  "✏️ Rename",
+                  style: TextStyle(fontSize: 12, color: clTextMain),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Text(
+                  "🗑️ Delete",
+                  style: TextStyle(fontSize: 12, color: Colors.redAccent),
+                ),
+              ),
+            ],
+          ),
+          onTap: widget.onTap,
+        ),
+      ),
+    );
+  }
 }

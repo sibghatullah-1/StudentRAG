@@ -9,7 +9,6 @@ import uvicorn
 import lancedb
 from ingest import ingest_file
 from chat import get_answer
-from sklearn.decomposition import PCA
 import numpy as np 
 
 # Store database safely in the user's AppData directory
@@ -108,14 +107,18 @@ async def visualize_vectors(chat_id: str):
     n_samples = len(vectors)
 
     if n_samples >= 3:
-        pca = PCA(n_components=3)
-        coords_3d = pca.fit_transform(vectors)
+        X = np.array(vectors)
+        X = X - np.mean(X, axis=0) # Center the data
+        U, S, Vt = np.linalg.svd(X, full_matrices=False) # Perform SVD natively
+        coords_3d = np.dot(X, Vt.T[:, :3])
         max_val = np.max(np.abs(coords_3d)) or 1.0
         coords_3d = (coords_3d / max_val).tolist()
     elif n_samples == 2:
-        pca = PCA(n_components=2)
-        coords_2d = pca.fit_transform(vectors)
-        coords_3d = [[row[0], row[1], 0.0] for row in coords_2d]
+        X = np.array(vectors)
+        X = X - np.mean(X, axis=0)
+        U, S, Vt = np.linalg.svd(X, full_matrices=False)
+        coords_2d = np.dot(X, Vt.T[:, :2])
+        coords_3d = [[float(row[0]), float(row[1]), 0.0] for row in coords_2d]
     else:
         coords_3d = [[0.0, 0.0, 0.0]]
 

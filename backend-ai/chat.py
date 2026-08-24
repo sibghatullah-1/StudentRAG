@@ -3,7 +3,6 @@ import lancedb
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_lancedb import LanceDB
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 

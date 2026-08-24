@@ -22,3 +22,6 @@ student_ai_app/.idea/
 # App Specific Temp Folders
 temp_uploades/
 .rag_cache/
+
+*.spec
+upx.exe
